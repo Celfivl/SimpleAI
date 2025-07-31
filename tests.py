@@ -1,24 +1,15 @@
-from functions.get_files_info import get_files_info
+import os
+from functions.get_files_info import get_file_content
 
-
-def test():
-    result = get_files_info("calculator", ".")
-    print("Result for current directory:")
-    print(result)
-    print("")
-
-    result = get_files_info("calculator", "pkg")
-    print("Result for 'pkg' directory:")
-    print(result)
-
-    result = get_files_info("calculator", "/bin")
-    print("Result for '/bin' directory:")
-    print(result)
-
-    result = get_files_info("calculator", "../")
-    print("Result for '../' directory:")
-    print(result)
-
-
-if __name__ == "__main__":
-    test()
+# --- First Test: lorem.txt truncation ---
+print("--- Testing lorem.txt truncation ---")
+try:
+    lorem_content = get_file_content("calculator", "lorem.txt")
+    print(f"Content of lorem.txt: {lorem_content}")
+    # You'll need to manually inspect the output to see if it truncates properly
+    # If the assignment specifies an exact truncation length, you could compare against it.
+    # Otherwise, simply observing the output is sufficient for this stage.
+except FileNotFoundError:
+    print("Error: lorem.txt not found in the 'calculator' directory.")
+except Exception as e:
+    print(f"An unexpected error occurred: {e}")
