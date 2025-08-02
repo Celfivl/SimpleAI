@@ -58,7 +58,37 @@ def get_file_content(working_directory, file_path):
         return f"Error: Permission denied to read file '{file_path}'."
     except UnicodeDecodeError:
         # Catches errors when trying to read a non-UTF-8 encoded file (e.g., binary files).
-        return f"Error: Could not decode file '{file_path}'. It might not be a text file or uses an unsupported encoding."
+            return f"Error: Could not decode file '{file_path}'. It might not be a text file or uses an unsupported encoding."
     except Exception as e:
-        # Catches any other unexpected errors during the file reading process.
-        return f"Error: An unexpected error occurred while reading '{file_path}': {e}"
+            # Catches any other unexpected errors during the file reading process.
+            return f"Error: An unexpected error occurred while reading '{file_path}': {e}"
+    
+def write_file(working_directory, file_path, content):
+    try:
+        # 1. Normalize and resolve paths for security
+        abs_working_dir = os.path.abspath(working_directory)
+        abs_file_path = os.path.abspath(os.path.join(abs_working_dir, file_path))
+    
+        # Ensure the file_path is within the working_directory
+        # os.path.commonprefix is a bit unreliable as it works character-by-character.
+        # A more robust check is to ensure that the resolved file path starts with the resolved working directory path
+        if not abs_file_path.startswith(abs_working_dir):
+            return f'Error: Cannot write to "{file_path}" as it is outside the permitted working directory'
+    
+        # 2. Ensure the directory for the file exists, creating it if necessary.
+        # os.makedirs(..., exist_ok=True) handles the case where directories already exist,
+        # preventing FileExistsError.
+        os.makedirs(os.path.dirname(abs_file_path), exist_ok=True)
+    
+        # 3. Overwrite the contents of the file
+        with open(abs_file_path, 'w') as f:
+            f.write(content)
+    
+        return f'Successfully wrote to "{file_path}" ({len(content)} characters written)'
+    
+    except OSError as e:
+            # Catch OS-related errors like permission issues or invalid paths.
+            return f"Error: An OS error occurred while writing to \"{file_path}\": {e}"
+    except Exception as e:
+            # Catch any other unexpected errors
+        return f"Error: An unexpected error occurred while writing to \"{file_path}\": {e}"
