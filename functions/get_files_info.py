@@ -1,5 +1,6 @@
 import os
-import config
+from functions import config
+from google.genai import types
 
 def get_files_info(working_directory, directory="."):
     abs_working_dir = os.path.abspath(working_directory)
@@ -92,3 +93,74 @@ def write_file(working_directory, file_path, content):
     except Exception as e:
             # Catch any other unexpected errors
         return f"Error: An unexpected error occurred while writing to \"{file_path}\": {e}"
+
+schema_get_files_info = types.FunctionDeclaration(
+    name="get_files_info",
+    description="Lists files in the specified directory along with their sizes, constrained to the working directory.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "directory": types.Schema(
+                type=types.Type.STRING,
+                description="The directory to list files from, relative to the working directory. If not provided, lists files in the working directory itself.",
+            ),
+        },
+    ),
+)
+
+# --- Schema for get_file_content ---
+schema_get_file_content = types.FunctionDeclaration(
+    name="get_file_content",
+    description="Reads the content of a specified file, constrained to the working directory. Returns the file's content or an error.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "file_path": types.Schema(
+                type=types.Type.STRING,
+                description="The path to the file to read, relative to the working directory. Must be a regular file.",
+            ),
+        },
+        required=["file_path"],
+    ),
+)
+
+# --- Schema for run_python_file ---
+schema_run_python_file = types.FunctionDeclaration(
+    name="run_python_file",
+    description="Executes a Python script securely within the working directory. Returns the script's stdout, stderr, and exit code, or an error.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "file_path": types.Schema(
+                type=types.Type.STRING,
+                description="The path to the Python script to execute, relative to the working directory. Must be a .py file.",
+            ),
+            "args": types.Schema(
+                type=types.Type.ARRAY,
+                description="Optional: A list of string arguments to pass to the Python script.",
+                items=types.Schema(type=types.Type.STRING),
+            ),
+        },
+        required=["file_path"],
+    ),
+)
+
+# --- Schema for write_file ---
+schema_write_file = types.FunctionDeclaration(
+    name="write_file",
+    description="Writes content to a file within the working directory. Creates the file if it doesn't exist and overwrites if it does. Returns a success or error message.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "file_path": types.Schema(
+                type=types.Type.STRING,
+                description="The path to the file to write, relative to the working directory.",
+            ),
+            "content": types.Schema(
+                type=types.Type.STRING,
+                description="The content string to write into the file.",
+            ),
+        },
+        required=["file_path", "content"],
+    ),
+)
