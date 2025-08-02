@@ -1,4 +1,4 @@
-import os, sys, argparse, json
+import os, sys, argparse, json, tiktoken
 from dotenv import load_dotenv
 from functions.get_files_info import schema_get_files_info, schema_get_file_content, schema_run_python_file, schema_write_file
 from functions.get_files_info import get_files_info, get_file_content, write_file
@@ -8,10 +8,9 @@ load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY")
 
 from google import genai
+from google.genai import types
 
 client = genai.Client(api_key=api_key)
-
-from google.genai import types
 
 system_prompt = """
 You are a helpful AI coding agent.
@@ -26,27 +25,45 @@ When a user asks a question or makes a request, make a function call plan. You c
 All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
 """
 
+MAX_CONTEXT_TOKENS = 100000
+ENCODING = tiktoken.encoding_for_model("gpt-4")
+
+def count_tokens(messages):
+    """
+    Counts the approximate number of tokens in a list of Gemini API messages.
+    """
+    token_count = 0
+    for message in messages:
+        # Each message has overhead tokens beyond its content
+        token_count += 4 # Message overhead (e.g., role, parts, etc.)
+        for part in message.parts:
+            if hasattr(part, 'text') and part.text:
+                token_count += len(ENCODING.encode(part.text))
+            elif hasattr(part, 'function_call') and part.function_call:
+                # Add tokens for function name and arguments
+                token_count += len(ENCODING.encode(part.function_call.name))
+                for arg_name, arg_value in part.function_call.args.items():
+                    token_count += len(ENCODING.encode(arg_name))
+                    token_count += len(ENCODING.encode(str(arg_value)))
+            elif hasattr(part, 'function_response') and part.function_response:
+                # Add tokens for function name and response
+                token_count += len(ENCODING.encode(part.function_response.name))
+                for key, value in part.function_response.response.items():
+                    token_count += len(ENCODING.encode(key))
+                    token_count += len(ENCODING.encode(str(value)))
+    return token_count
+
 available_functions = types.Tool(
     function_declarations=[
         schema_get_files_info,
-        schema_get_file_content,  
-        schema_run_python_file,  
-        schema_write_file,       
+        schema_get_file_content,
+        schema_run_python_file,
+        schema_write_file,
     ]
 )
 
-parser = argparse.ArgumentParser()
-parser.add_argument("prompt", help="The user's prompt") 
-parser.add_argument("--verbose", action="store_true")
-args = parser.parse_args()
-user_prompt = args.prompt
-is_verbose = args.verbose 
-
-# Define the hardcoded working directory
 WORKING_DIRECTORY = "./calculator"
 
-# --- Dictionary mapping function names (strings) to actual function objects ---
-# This allows dynamic calling using function_map[function_name](**kwargs)
 function_map = {
     "get_files_info": get_files_info,
     "get_file_content": get_file_content,
@@ -55,49 +72,39 @@ function_map = {
 }
 
 def call_function(function_call_part, verbose=False):
-    """
-    Handles the abstract task of logging a function call requested by the LLM.
-
-    """
     function_name = function_call_part.name
-    function_args = dict(function_call_part.args) # Convert to mutable dictionary
+    function_args = dict(function_call_part.args)
 
     if verbose:
-        print(f"Calling function: {function_call_part.name}({function_call_part.args})")
+        print(f"Calling function: {function_name}({function_args})")
     else:
-        print(f" - Calling function: {function_call_part.name}")
+        print(f" - Calling function: {function_name}")
 
     if function_name not in function_map:
-        # If the function name is not recognized, return an error message
-        return types.Content(
-    role="tool",
-    parts=[
-        types.Part.from_function_response(
-            name=function_name,
-            response={"error": f"Unknown function: {function_name}"},
-        )
-    ],
-)
-
-    # Manually add the working_directory parameter for security
-    function_args['working_directory'] = WORKING_DIRECTORY
-
-    try:
-        # Dynamically call the function with the unpacked arguments
-        # The '**' operator unpacks the dictionary into keyword arguments
-        result = function_map[function_name](**function_args)
-         # Return types.Content with a from_function_response describing the result
         return types.Content(
             role="tool",
             parts=[
                 types.Part.from_function_response(
                     name=function_name,
-                    response={"result": result},
+                    response={"error": f"Unknown function: {function_name}"},
+                )
+            ],
+        )
+
+    function_args['working_directory'] = WORKING_DIRECTORY
+
+    try:
+        function_result = function_map[function_name](**function_args)
+        return types.Content(
+            role="tool",
+            parts=[
+                types.Part.from_function_response(
+                    name=function_name,
+                    response={"result": function_result},
                 )
             ],
         )
     except Exception as e:
-        # Catch any exceptions during the actual function execution
         return types.Content(
             role="tool",
             parts=[
@@ -109,26 +116,36 @@ def call_function(function_call_part, verbose=False):
         )
 
 
-def main():
+def run_ai_query(user_input, is_verbose_mode):
+    # This messages list will be built up and potentially trimmed
     messages = [
-    types.Content(role="user", parts=[types.Part(text=user_prompt)]),
-]
-    if len(sys.argv) < 2:
-        print("Error: Please provide a prompt")
-        sys.exit(1)
+        types.Content(role="user", parts=[types.Part(text=user_input)]),
+    ]
 
-    if args.verbose:
-        print(f"User prompt: {user_prompt}")
+    response_text_output = ""
+    current_tokens = count_tokens(messages) # Get initial token count
 
-        # --- Loop for repeated calls to generate_content ---
-    for i in range(20):  # Limit to 20 iterations
-        if args.verbose:
-            print(f"\n--- Iteration {i+1} ---")
+    for i in range(20):
+        if is_verbose_mode:
+            print(f"\n--- Iteration {i+1} --- (Current Tokens: {current_tokens})")
+
+        # --- Token Recycling: Trim messages if exceeding limit before calling API ---
+        while current_tokens > MAX_CONTEXT_TOKENS:
+            if len(messages) <= 1: # Always keep at least the initial user message
+                if is_verbose_mode:
+                    print("Warning: Cannot trim messages further, context window exceeded.")
+                break
+            
+            removed_message = messages.pop(0) # Remove the oldest message
+            current_tokens = count_tokens(messages) # Recalculate tokens after removal
+            if is_verbose_mode:
+                print(f"  - Trimmed oldest message. New token count: {current_tokens}")
+        # --- End Token Recycling ---
 
         try:
             response = client.models.generate_content(
                 model='gemini-2.0-flash-001',
-                contents=messages,
+                contents=messages, # Pass the potentially trimmed messages list
                 config=types.GenerateContentConfig(tools=[available_functions], system_instruction=system_prompt),
             )
 
@@ -136,53 +153,54 @@ def main():
             if response.candidates:
                 for candidate in response.candidates:
                     messages.append(candidate.content)
+                    current_tokens = count_tokens(messages) # Update token count
+                    if is_verbose_mode:
+                        print(f"  - Appended candidate. New token count: {current_tokens}")
 
             # Check for function calls and execute them
             if response.function_calls:
                 for function_call_part in response.function_calls:
-                    function_call_result = call_function(function_call_part, verbose=is_verbose)
+                    function_call_result = call_function(function_call_part, verbose=is_verbose_mode)
 
-                    # Validate the structure of the returned types.Content
                     if not (isinstance(function_call_result, types.Content) and
                             function_call_result.parts and
-                            function_call_result.parts[0].function_response and
-                            hasattr(function_call_result.parts[0].function_response, 'response')):
-                        raise ValueError("Fatal Error: call_function did not return a valid "
-                                         "types.Content with .parts[0].function_response.response")
+                            function_call_result.parts.function_response and
+                            hasattr(function_call_result.parts.function_response, 'response')):
+                        response_text_output = f"Error: Invalid function call result format from LLM."
+                        if is_verbose_mode: print(response_text_output)
+                        return response_text_output
 
-                    actual_response_data = function_call_result.parts[0].function_response.response
+                    actual_response_data = function_call_result.parts.function_response.response
 
-                    if is_verbose:
+                    if is_verbose_mode:
                         print(f"-> {actual_response_data}")
 
-                    messages.append(function_call_result) # Add the tool's response to messages
+                    messages.append(function_call_result)
+                    current_tokens = count_tokens(messages) # Update token count
+                    if is_verbose_mode:
+                        print(f"  - Appended function result. New token count: {current_tokens}")
+
 
             elif response.text:
-                # If a text response is received, it means the model is done or providing
-                # a direct answer. Print and break the loop.
-                print(response.text)
-                break # Exit the loop as the conversation is likely complete
+                response_text_output = response.text
+                if is_verbose_mode: print(response_text_output)
+                messages.append(types.Content(role="model", parts=[types.Part(text=response_text_output)]))
+                current_tokens = count_tokens(messages) # Update token count one last time
+                if is_verbose_mode:
+                        print(f"  - Appended final text response. New token count: {current_tokens}")
+                break
             else:
-                # Handle cases where there might be no text or function call (e.g., safety block)
-                print("No response text or function call was received. Ending conversation.")
-                break # Break if nothing useful is returned
+                response_text_output = "No response text or function call was received. Ending conversation."
+                if is_verbose_mode: print(response_text_output)
+                break
 
         except Exception as e:
-            # Handle any exceptions during the generate_content call or processing
-            print(f"Error during iteration {i+1}: {e}")
-            break # Break the loop on error
+            response_text_output = f"Error during AI interaction: {e}"
+            if is_verbose_mode: print(response_text_output)
+            break
 
-    else: # This 'else' belongs to the for loop, executes if loop completes without a 'break'
-        print("\nWarning: Maximum iterations reached without a final response.")
+    else:
+        response_text_output = "Warning: Maximum iterations reached without a final response."
+        if is_verbose_mode: print(response_text_output)
 
-
-    if args.verbose:
-        # Print the token usage information for the *last* response
-        if 'response' in locals() and response.usage_metadata:
-            print(f"\nPrompt tokens (last response): {response.usage_metadata.prompt_token_count}")
-            print(f"Response tokens (last response): {response.usage_metadata.candidates_token_count}")
-        else:
-            print("\nToken usage information not available for the last response.")
-
-if __name__ == "__main__":
-    main()
+    return response_text_output
