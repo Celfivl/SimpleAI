@@ -1,0 +1,23 @@
+# pancake_recipe.py
+
+recipe = '''
+Ingredients:
+- 1 cup all-purpose flour
+- 2 tablespoons sugar
+- 2 teaspoons baking powder
+- 1/2 teaspoon salt
+- 1 cup milk
+- 2 tablespoons melted butter
+- 1 egg
+
+Instructions:
+1. In a large bowl, whisk together the flour, sugar, baking powder, and salt.
+2. In a separate bowl, whisk together the milk, melted butter, and egg.
+3. Pour the wet ingredients into the dry ingredients and whisk until just combined. Be careful not to overmix.
+4. Heat a lightly oiled griddle or frying pan over medium heat.
+5. Pour 1/4 cup of batter onto the griddle for each pancake.
+6. Cook for 2-3 minutes per side, or until golden brown and cooked through.
+7. Serve immediately with your favorite toppings.
+'''
+
+print(recipe)
