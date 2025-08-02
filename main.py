@@ -120,44 +120,69 @@ def main():
     if args.verbose:
         print(f"User prompt: {user_prompt}")
 
-    response = client.models.generate_content(
-    model='gemini-2.0-flash-001', contents=messages,
-    config=types.GenerateContentConfig(tools=[available_functions], system_instruction=system_prompt),
-    )
-   
-   # --- Check for function calls ---
-    if response.function_calls:
-        for function_call_part in response.function_calls:
-            # Call the function using call_function and capture the result
-            # The call_function should now return types.Content as per our last successful interaction
-            function_call_result = call_function(function_call_part, verbose=is_verbose)
+        # --- Loop for repeated calls to generate_content ---
+    for i in range(20):  # Limit to 20 iterations
+        if args.verbose:
+            print(f"\n--- Iteration {i+1} ---")
 
-            # Ensure the result is a types.Content object and has the expected structure
-            if not (isinstance(function_call_result, types.Content) and
-                    function_call_result.parts and
-                    function_call_result.parts[0].function_response and
-                    hasattr(function_call_result.parts[0].function_response, 'response')):
-                raise ValueError("Fatal Error: call_function did not return a valid "
-                                 "types.Content with .parts[0].function_response.response")
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.0-flash-001',
+                contents=messages,
+                config=types.GenerateContentConfig(tools=[available_functions], system_instruction=system_prompt),
+            )
 
-            # Access the actual response from the tool
-            actual_response_data = function_call_result.parts[0].function_response.response
+            # Add model's candidates to messages list (for tool use history)
+            if response.candidates:
+                for candidate in response.candidates:
+                    messages.append(candidate.content)
 
-            if is_verbose:
-                    # Print the result of the function call as requested
-                print(f"-> {actual_response_data}")
-    
-    elif response.text:
-            # Print the AI's text response if no function call was made
-        print(response.text)
-    else:
-            # Handle cases where there might be no text or function call (e.g., safety block)
-        print("No response text or function call was received.")
-    
-if args.verbose:
-         # Print the token usage information
-    print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
-    print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
+            # Check for function calls and execute them
+            if response.function_calls:
+                for function_call_part in response.function_calls:
+                    function_call_result = call_function(function_call_part, verbose=is_verbose)
+
+                    # Validate the structure of the returned types.Content
+                    if not (isinstance(function_call_result, types.Content) and
+                            function_call_result.parts and
+                            function_call_result.parts[0].function_response and
+                            hasattr(function_call_result.parts[0].function_response, 'response')):
+                        raise ValueError("Fatal Error: call_function did not return a valid "
+                                         "types.Content with .parts[0].function_response.response")
+
+                    actual_response_data = function_call_result.parts[0].function_response.response
+
+                    if is_verbose:
+                        print(f"-> {actual_response_data}")
+
+                    messages.append(function_call_result) # Add the tool's response to messages
+
+            elif response.text:
+                # If a text response is received, it means the model is done or providing
+                # a direct answer. Print and break the loop.
+                print(response.text)
+                break # Exit the loop as the conversation is likely complete
+            else:
+                # Handle cases where there might be no text or function call (e.g., safety block)
+                print("No response text or function call was received. Ending conversation.")
+                break # Break if nothing useful is returned
+
+        except Exception as e:
+            # Handle any exceptions during the generate_content call or processing
+            print(f"Error during iteration {i+1}: {e}")
+            break # Break the loop on error
+
+    else: # This 'else' belongs to the for loop, executes if loop completes without a 'break'
+        print("\nWarning: Maximum iterations reached without a final response.")
+
+
+    if args.verbose:
+        # Print the token usage information for the *last* response
+        if 'response' in locals() and response.usage_metadata:
+            print(f"\nPrompt tokens (last response): {response.usage_metadata.prompt_token_count}")
+            print(f"Response tokens (last response): {response.usage_metadata.candidates_token_count}")
+        else:
+            print("\nToken usage information not available for the last response.")
 
 if __name__ == "__main__":
     main()
